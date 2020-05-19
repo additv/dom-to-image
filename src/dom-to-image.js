@@ -6,16 +6,6 @@
     var fontFaces = newFontFaces();
     var images = newImages();
 
-    // Default impl options
-    var defaultOptions = {
-        // Default is to fail on error, no placeholder
-        imagePlaceholder: undefined,
-        // Default cache bust is false, it will use the cache
-        cacheBust: false,
-        // Default scroll fix is false, it will not try to fix scrollbars
-        scrollFix: false
-    };
-
     var domtoimage = {
         toSvg: toSvg,
         toPng: toPng,
@@ -26,8 +16,7 @@
             fontFaces: fontFaces,
             images: images,
             util: util,
-            inliner: inliner,
-            options: {}
+            inliner: inliner
         }
     };
 
@@ -48,13 +37,10 @@
      * @param {Object} options.style - an object whose properties to be copied to node's style before rendering.
      * @param {Number} options.quality - a Number between 0 and 1 indicating image quality (applicable to JPEG only),
                 defaults to 1.0.
-     * @param {String} options.imagePlaceholder - dataURL to use as a placeholder for failed images, default behaviour is to fail fast on images we can't fetch
-     * @param {Boolean} options.cacheBust - set to true to cache bust by appending the time to the request url
      * @return {Promise} - A promise that is fulfilled with a SVG image data URL
      * */
     function toSvg(node, options) {
         options = options || {};
-        copyOptions(options);
         return Promise.resolve(node)
             .then(function (node) {
                 return cloneNode(node, options.filter, true);
@@ -136,27 +122,6 @@
             .then(util.canvasToBlob);
     }
 
-    function copyOptions(options) {
-        // Copy options to impl options for use in impl
-        if(typeof(options.imagePlaceholder) === 'undefined') {
-            domtoimage.impl.options.imagePlaceholder = defaultOptions.imagePlaceholder;
-        } else {
-            domtoimage.impl.options.imagePlaceholder = options.imagePlaceholder;
-        }
-
-        if(typeof(options.cacheBust) === 'undefined') {
-            domtoimage.impl.options.cacheBust = defaultOptions.cacheBust;
-        } else {
-            domtoimage.impl.options.cacheBust = options.cacheBust;
-        }
-      
-        if(typeof(options.scrollFix) === 'undefined') {
-            domtoimage.impl.options.scrollFix = defaultOptions.scrollFix;
-        } else {
-            domtoimage.impl.options.scrollFix = options.scrollFix;
-        }
-    }
-
     function draw(domNode, options) {
         return toSvg(domNode, options)
             .then(util.makeImage)
@@ -236,18 +201,11 @@
                 });
 
             function cloneStyle() {
-                var originalStyle = window.getComputedStyle(original);
-                copyStyle(originalStyle, clone.style);
+                copyStyle(window.getComputedStyle(original), clone.style);
 
                 function copyStyle(source, target) {
                     if (source.cssText) target.cssText = source.cssText;
                     else copyProperties(source, target);
-
-                    // Chrome returns fontStretch from getComputedStyle in percent
-                    // but it does not accept a percent value when using the short hand
-                    // font = ....
-                    // Thus we have to reset fontStretch or we lose all our font styles
-                    target.fontStretch = 'normal';
 
                     function copyProperties(source, target) {
                         util.asArray(source).forEach(function (name) {
@@ -257,87 +215,6 @@
                                 source.getPropertyPriority(name)
                             );
                         });
-                    }
-                }
-
-                if(domtoimage.impl.options.scrollFix &&
-                    (original.scrollTop || original.scrollLeft)) {
-                    // Setup container for absolute positioning of children
-                    clone.style.position = 'relative';
-                    clone.style.overflow = 'hidden';
-                    clone.style.width = original.offsetWidth + 'px';
-                    clone.style.height = original.offsetHeight + 'px';
-                    var scrollTopRemaining = original.scrollTop > 0 ? original.scrollTop : null;
-                    var scrollLeftRemaining = original.scrollLeft > 0 ? original.scrollLeft : null;
-                    var originalIsPositionRelative = originalStyle['position'] === 'relative';
-                    var computedStylesCache = {};
-                    var boundingRectCache = {};
-                    
-                    // Loop through children and set position based on original
-                    // childs position and original containers scroll position
-                    for(var i = 0; i < clone.children.length; i++) {
-                        var cloneChild = clone.children[i];
-                        // Make sure this element is stylable
-                        if(typeof(cloneChild) === 'undefined' ||
-                            cloneChild === null ||
-                            typeof(cloneChild.style) === 'undefined') {
-
-                            continue;
-                        }
-                        var originalChildStyles = computedStylesCache[i] || window.getComputedStyle(original.children[i]);
-                        computedStylesCache[i] = originalChildStyles;
-
-                        // Set child to absolute positioning relative to parent (container)
-                        cloneChild.style.position = 'absolute';
-
-                        // Take into account the fact that there may be children which were already
-                        // positioned absolute relative to its parent, thus we need to use the original position
-                        if (originalIsPositionRelative && originalChildStyles['position'] === 'absolute') {
-                            var top = parseInt(originalChildStyles['top']);
-                            var left = parseInt(originalChildStyles['left']);
-                            top = isNaN(top) ? 0 : top;
-                            left = isNaN(left) ? 0 : left;
-                            top -= original.scrollTop;
-                            left -= original.scrollLeft;
-                            cloneChild.style.top = top + 'px';
-                            cloneChild.style.left = left + 'px';
-                            continue;
-                        }
-
-                        var currentChildBoundingRect = boundingRectCache[i] || original.children[i].getBoundingClientRect();
-                        boundingRectCache[i] = currentChildBoundingRect;
-
-                        // Find last child that was not position absolute
-                        var lastChild, lastChildIndex, lastChildBoundingRect;
-                        for(lastChildIndex = i - 1; lastChildIndex >= 0; lastChildIndex--) {
-                            var childStyles = computedStylesCache[lastChildIndex] || window.getComputedStyle(original.children[lastChildIndex]);
-                            computedStylesCache[lastChildIndex] = childStyles;
-                            if (childStyles['position'] !== 'absolute') {
-                                lastChild = original.children[lastChildIndex];
-                                break;
-                            }
-                        }
-                        
-                        // If we found a child then subtract its height/width from the scroll position
-                        if(typeof(lastChild) !== 'undefined') {
-                            lastChildBoundingRect = boundingRectCache[lastChildIndex] || lastChild.getBoundingClientRect();
-                            boundingRectCache[lastChildIndex] = lastChildBoundingRect;
-                            
-                            // isStackingTop is true when elements are being displayed block
-                            if(lastChildBoundingRect.top !== currentChildBoundingRect.top) {
-                                // Subtract last child real height to get the next items position
-                                scrollTopRemaining -= (currentChildBoundingRect.top - lastChildBoundingRect.top);
-                            }
-                            // isStackingLeft is true when elements are being displayed inline
-                            if(lastChildBoundingRect.left !== currentChildBoundingRect.left) {
-                                // Subtract the last child real width to get the next items position
-                                scrollLeftRemaining -= (currentChildBoundingRect.left - lastChildBoundingRect.left);
-                            }
-                        }
-
-                        // Set the childs position based on our current scroll position
-                        cloneChild.style.top = -scrollTopRemaining + 'px';
-                        cloneChild.style.left = -scrollLeftRemaining + 'px';
                     }
                 }
             }
@@ -391,7 +268,7 @@
             }
 
             function fixSvg() {
-                if (!(clone instanceof SVGElement)) return;
+                if (!(clone instanceof SVGRectElement) && !(clone instanceof SVGImageElement)) return;
                 clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
 
                 if (!(clone instanceof SVGRectElement)) return;
@@ -428,6 +305,7 @@
                 node.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
                 return new XMLSerializer().serializeToString(node);
             })
+            .then(util.escapeXhtml)
             .then(function (xhtml) {
                 return '<foreignObject x="0" y="0" width="100%" height="100%">' + xhtml + '</foreignObject>';
             })
@@ -436,7 +314,7 @@
                     foreignObject + '</svg>';
             })
             .then(function (svg) {
-                return encodeURI('data:image/svg+xml;charset=utf-8,') + encodeURIComponent(svg);
+                return 'data:image/svg+xml;charset=utf-8,' + svg;
             });
     }
 
@@ -453,6 +331,7 @@
             uid: uid(),
             delay: delay,
             asArray: asArray,
+            escapeXhtml: escapeXhtml,
             makeImage: makeImage,
             width: width,
             height: height
@@ -556,11 +435,6 @@
 
         function getAndEncode(url) {
             var TIMEOUT = 30000;
-            if(domtoimage.impl.options.cacheBust) {
-                // Cache bypass so we dont have CORS issues with cached images
-                // Source: https://developer.mozilla.org/en/docs/Web/API/XMLHttpRequest/Using_XMLHttpRequest#Bypassing_the_cache
-                url += ((/\?/).test(url) ? "&" : "?") + (new Date()).getTime();
-            }
 
             return new Promise(function (resolve) {
                 var request = new XMLHttpRequest();
@@ -572,24 +446,11 @@
                 request.open('GET', url, true);
                 request.send();
 
-                var placeholder;
-                if(domtoimage.impl.options.imagePlaceholder) {
-                    var split = domtoimage.impl.options.imagePlaceholder.split(/,/);
-                    if(split && split[1]) {
-                        placeholder = split[1];
-                    }
-                }
-
                 function done() {
                     if (request.readyState !== 4) return;
 
                     if (request.status !== 200) {
-                        if(placeholder) {
-                            resolve(placeholder);
-                        } else {
-                            fail('cannot fetch resource: ' + url + ', status: ' + request.status);
-                        }
-
+                        fail('cannot fetch resource: ' + url + ', status: ' + request.status);
                         return;
                     }
 
@@ -602,11 +463,7 @@
                 }
 
                 function timeout() {
-                    if(placeholder) {
-                        resolve(placeholder);
-                    } else {
-                        fail('timeout of ' + TIMEOUT + 'ms occured while fetching resource: ' + url);
-                    }
+                    fail('timeout of ' + TIMEOUT + 'ms occured while fetching resource: ' + url);
                 }
 
                 function fail(message) {
@@ -639,6 +496,10 @@
             var length = arrayLike.length;
             for (var i = 0; i < length; i++) array.push(arrayLike[i]);
             return array;
+        }
+
+        function escapeXhtml(string) {
+            return string.replace(/#/g, '%23').replace(/\n/g, '%0A');
         }
 
         function width(node) {
@@ -805,18 +666,25 @@
             };
 
             function inline(get) {
-                if (util.isDataUrl(element.src)) return Promise.resolve();
+                var src = (element instanceof SVGImageElement) ? element.href.baseVal : element.src;
 
-                return Promise.resolve(element.src)
+                if (util.isDataUrl(src)) return Promise.resolve();
+
+                return Promise.resolve(src)
                     .then(get || util.getAndEncode)
                     .then(function (data) {
-                        return util.dataAsUrl(data, util.mimeType(element.src));
+                        return util.dataAsUrl(data, util.mimeType(src));
                     })
                     .then(function (dataUrl) {
                         return new Promise(function (resolve, reject) {
                             element.onload = resolve;
                             element.onerror = reject;
-                            element.src = dataUrl;
+                            if (element instanceof SVGImageElement) {
+                                element.href.baseVal = dataUrl;
+                            } else {
+                                element.src = dataUrl;
+                            }
+
                         });
                     });
             }
@@ -827,7 +695,7 @@
 
             return inlineBackground(node)
                 .then(function () {
-                    if (node instanceof HTMLImageElement)
+                    if (node instanceof HTMLImageElement || node instanceof SVGImageElement)
                         return newImage(node).inline();
                     else
                         return Promise.all(
