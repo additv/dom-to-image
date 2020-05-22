@@ -6,6 +6,16 @@
     var fontFaces = newFontFaces();
     var images = newImages();
 
+    var cacheForResponses = [];
+
+    // Default impl options
+    var defaultOptions = {
+        // Default is to fail on error, no placeholder
+        imagePlaceholder: undefined,
+        // Default cache bust is false, it will use the cache
+        cacheBust: false
+    };
+
     var domtoimage = {
         toSvg: toSvg,
         toPng: toPng,
@@ -16,7 +26,8 @@
             fontFaces: fontFaces,
             images: images,
             util: util,
-            inliner: inliner
+            inliner: inliner,
+            options: {}
         }
     };
 
@@ -37,10 +48,13 @@
      * @param {Object} options.style - an object whose properties to be copied to node's style before rendering.
      * @param {Number} options.quality - a Number between 0 and 1 indicating image quality (applicable to JPEG only),
                 defaults to 1.0.
+     * @param {String} options.imagePlaceholder - dataURL to use as a placeholder for failed images, default behaviour is to fail fast on images we can't fetch
+     * @param {Boolean} options.cacheBust - set to true to cache bust by appending the time to the request url
      * @return {Promise} - A promise that is fulfilled with a SVG image data URL
      * */
     function toSvg(node, options) {
         options = options || {};
+        copyOptions(options);
         return Promise.resolve(node)
             .then(function (node) {
                 return cloneNode(node, options.filter, true);
@@ -122,6 +136,21 @@
             .then(util.canvasToBlob);
     }
 
+    function copyOptions(options) {
+        // Copy options to impl options for use in impl
+        if(typeof(options.imagePlaceholder) === 'undefined') {
+            domtoimage.impl.options.imagePlaceholder = defaultOptions.imagePlaceholder;
+        } else {
+            domtoimage.impl.options.imagePlaceholder = options.imagePlaceholder;
+        }
+
+        if(typeof(options.cacheBust) === 'undefined') {
+            domtoimage.impl.options.cacheBust = defaultOptions.cacheBust;
+        } else {
+            domtoimage.impl.options.cacheBust = options.cacheBust;
+        }
+    }
+    
     function draw(domNode, options) {
         return toSvg(domNode, options)
             .then(util.makeImage)
@@ -435,8 +464,19 @@
 
         function getAndEncode(url) {
             var TIMEOUT = 30000;
+            var _url = url.split('?')[0];
+            var _obj = cacheForResponses.find(function (el) {
+                return el.url === _url;
+            });
+            if (_obj) return _obj.promise;
 
-            return new Promise(function (resolve) {
+            if(domtoimage.impl.options.cacheBust) {
+                // Cache bypass so we dont have CORS issues with cached images
+                // Source: https://developer.mozilla.org/en/docs/Web/API/XMLHttpRequest/Using_XMLHttpRequest#Bypassing_the_cache
+                url += ((/\?/).test(url) ? "&" : "?") + (new Date()).getTime();
+            }
+
+            var promise = new Promise(function (resolve) {
                 var request = new XMLHttpRequest();
 
                 request.onreadystatechange = done;
@@ -446,11 +486,24 @@
                 request.open('GET', url, true);
                 request.send();
 
+                var placeholder;
+                if(domtoimage.impl.options.imagePlaceholder) {
+                    var split = domtoimage.impl.options.imagePlaceholder.split(/,/);
+                    if(split && split[1]) {
+                        placeholder = split[1];
+                    }
+                }
+
                 function done() {
                     if (request.readyState !== 4) return;
 
                     if (request.status !== 200) {
-                        fail('cannot fetch resource: ' + url + ', status: ' + request.status);
+                        if(placeholder) {
+                            resolve(placeholder);
+                        } else {
+                            fail('cannot fetch resource: ' + url + ', status: ' + request.status);
+                        }
+
                         return;
                     }
 
@@ -463,7 +516,11 @@
                 }
 
                 function timeout() {
-                    fail('timeout of ' + TIMEOUT + 'ms occured while fetching resource: ' + url);
+                    if(placeholder) {
+                        resolve(placeholder);
+                    } else {
+                        fail('timeout of ' + TIMEOUT + 'ms occured while fetching resource: ' + url);
+                    }
                 }
 
                 function fail(message) {
@@ -471,6 +528,12 @@
                     resolve('');
                 }
             });
+            _obj = {
+                url: _url,
+                promise: promise
+            };
+            cacheForResponses.push(_obj);
+            return _obj.promise;
         }
 
         function dataAsUrl(content, type) {
